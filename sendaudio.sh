@@ -25,23 +25,15 @@ close_resources(){
 	pkill -P "$$" &>/dev/null ||:
 }
 
-ERROR(){
-	printf "[ERROR]: %s\n" "$*";
-}
-
 PANIC(){
 	printf "[PANIC]: %s\n" "$*";
 	close_resources
 	exit 1;
 }
 
-COMPLETE(){
-	printf "[Complete]: %s\n" "$*";
-}
-
-STATUS(){
-	printf "[%s]\n" "$*";
-}
+ERROR(){ printf "[ERROR]: %s\n" "$*"; }
+COMPLETE(){ printf "[Complete]: %s\n" "$*"; }
+STATUS(){ printf "[%s]\n" "$*"; }
 
 find_files_by_mimetype(){
 	local delim='///'
@@ -57,6 +49,8 @@ find_files_by_mimetype(){
 	| grep -v "[\t ]${ignore[${mimetype}]:-^$$}" \
 	| awk -F "${delim}" '{print $1}'
 }
+
+get_bitrate(){ mediainfo --Output='Audio;%BitRate%' "$1"; }
 
 handler()
 {
@@ -108,7 +102,8 @@ do
 	c=0
 	for i in "${audiofiles[@]}";
 	do
-		if [[ $(mediainfo --Output='Audio;%BitRate%' "$i") > $a_bitrate ]];
+		bitrate=$(mediainfo --Output='Audio;%BitRate%' "$i")
+		if [[ $bitrate -gt $a_bitrate ]];
 		then
 			# STATUS "Reencoding $i"
 			newfile="${outdir}/${i%.*}.ogg"
