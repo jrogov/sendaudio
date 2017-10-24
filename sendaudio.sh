@@ -3,12 +3,78 @@
 set -u
 set -e
 
+help(){
+	echo \
+"
+SendAudio - script for sending music albums via sshfs. Reencodes audiofiles too.
+
+
+Usage:
+splitaudio.sh [options] dir1 ...
+
+Where dir - directory with music album's content (audiofiles and scans).
+Copies album art and nested directories as well.
+
+Example:
+	sendaudio.sh \
+	'Jimi Hendrix - Are You Experienced [1967]' \
+	'The Jimi Hendrix Experience - Axis Bold As Love [1967]'
+
+Options:
+
+	-i
+		include all image files found along audio files (Default)
+
+	-I
+		include all image files found in album
+
+	-c
+		include only cover image files, such as cover.jpg, front.png, folder.gif (case insensitive)
+
+	-n
+		add .nomedia files along any image files.
+
+	-h
+		print this help
+
+"
+	exit
+}
+
+
+OUTPUT_DIR="$(pwd)"
+
+NOMEDIA=0
+IMAGES_INCLUDE_ALONG=0
+IMAGES_INCLUDE_ALL=1
+IMAGES_INCLUDE_COVER=2
+
+IMAGES_INCLUDE="${IMAGES_INCLUDE_ALONG}"
+
+TMP=$(getopt -o "iIcnh" -- "$@")
+eval set -- "${TMP}"
+while true
+do
+	case "$1" in
+	-i  ) IMAGES_INCLUDE="${IMAGES_INCLUDE_ALONG}"; shift;;
+	-I  ) IMAGES_INCLUDE="${IMAGES_INCLUDE_ALL}"; shift;;
+	-c	) IMAGES_INCLUDE="${IMAGES_INCLUDE_COVER}"; shift;;
+	-n	) NOMEDIA=1; shift;;
+	-h	) help;;
+	--	) shift; break;
+	esac
+done
+
+
 TMP='/tmp/sendaudio'
 
 ENCODING_PARAMS='-c:a libvorbis -q:a 10'
 
 # Lowest bitrate for reencoding. If lower - just copy.
 a_bitrate=320000 #320k
+images_cover_names=( 'cover' 'folder' 'front' 'cd' )
+IFS=\| eval 'covers_regexp="/(${images_cover_names[*]})\.\w+?$"'
+
 
 SSH_HOSTNAME='phone_filetransfer'
 SSH_OPTIONS='-oauto_cache,reconnect,no_readahead,Ciphers=arcfour,umask=000'
@@ -84,17 +150,33 @@ do
 	set +u
 
 	readarray -t audiofiles < <( find_files_by_mimetype . audio )
-	readarray -t mediadirs < <(echo "."; { printf '%s\0' "${audiofiles[@]}"; } | xargs -0 dirname | sort -u;)
-	readarray -t images < <( for i in "${mediadirs[@]}"; do find_files_by_mimetype "$i" image 1; done  )
+	readarray -t audiodirs < <( { echo "."; printf '%s\0' "${audiofiles[@]}"; } | xargs -0 dirname | sort -u;)
+
+	case "${IMAGES_INCLUDE}" in
+		"${IMAGES_INCLUDE_ALONG}"	)
+			readarray -t images < <( for i in "${audiodirs[@]}"; do find_files_by_mimetype "$i" image 1; done  );
+			# break
+			;;
+		"${IMAGES_INCLUDE_ALL}"		)
+			readarray -t images < <( find_files_by_mimetype . image);
+			# break
+			;;
+		"${IMAGES_INCLUDE_COVER}"	)
+			readarray -t images < <( find_files_by_mimetype . image | grep -iE "${covers_regexp}");
+			# break
+			;;
+	esac
+	readarray -t imagedirs < <({ printf '%s\0' "${images[@]}"; } | xargs -0 dirname | sort -u;)
+
 
 	# echo "=========AUDIOFILES=========="; printf -- '%s\n' "${audiofiles[@]}"; echo
-	# echo "=========MEDIADIRS=========="; printf -- '%s\n' "${mediadirs[@]}"; echo
+	# echo "=========MEDIADIRS=========="; printf -- '%s\n' "${audiodirs[@]}"; echo
 	# echo "=========IMAGES=========="; printf -- '%s\n' "${images[@]}"; echo
 
 	STATUS 'Creating hierarchy'
-	for i in "${mediadirs[@]:1}";
+	for i in "${audiodirs[@]}" "${imagedirs[@]}";
 	do
-		mkdir -p "${outdir}"/"$i"
+		mkdir -p "${outdir}"/"$i" &>/dev/null
 	done
 
 	STATUS 'Reencoding audio files'
@@ -133,6 +215,14 @@ do
 	done
 	set -u
 	cd - &>/dev/null
+
+	if [[ $NOMEDIA -eq 1 ]]
+	then
+		for i in "${imagedirs[@]}"
+		do
+			>"$(dirname $i)/.nomedia"
+		done
+	fi
 
 
 	STATUS 'Waiting for encoding'
